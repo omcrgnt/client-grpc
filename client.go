@@ -112,12 +112,21 @@ func (c *Client) StandBy() error {
 	return nil
 }
 
+// started reports whether StandBy has successfully dialed. Also guards a
+// nil *Client itself (matching Label/Target/Conn) — unlike StandBy, Ready
+// and Close are ordinary public methods a caller could reach with a nil
+// pointer, not calls the framework alone makes on an already-registered
+// instance.
+func (c *Client) started() bool {
+	return c != nil && c.conn != nil
+}
+
 // Close closes the gRPC connection. A no-op if StandBy never ran (e.g.
 // StandBy itself failed, or this Client was never wired through
 // app.Bootstrap) — c.conn is nil in that case, and grpc.ClientConn.Close
 // would otherwise panic on a nil receiver.
 func (c *Client) Close(_ context.Context) error {
-	if c.conn == nil {
+	if !c.started() {
 		return nil
 	}
 	err := c.conn.Close()

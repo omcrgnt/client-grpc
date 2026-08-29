@@ -150,10 +150,49 @@ func TestProbeReady_notStarted(t *testing.T) {
 }
 
 func TestClient_Close_beforeStandBy(t *testing.T) {
-	// StandBy either never ran (never wired through app.Bootstrap) or itself
-	// failed — c.conn is nil either way. Close must return cleanly, not
-	// panic on grpc.ClientConn.Close's nil-receiver dereference.
 	c := &clientgrpc.Client{}
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClient_Close_nilReceiver(t *testing.T) {
+	var c *clientgrpc.Client
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClient_Close_doubleClose(t *testing.T) {
+	// A different state than TestClient_Close_beforeStandBy: StandBy did
+	// succeed here, so the first Close has real work to do; the second
+	// hits the same nil-conn path but via c.conn being reset by the first
+	// Close, not via StandBy never having run.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lis.Close() })
+
+	metrics, _ := testGRPCMetrics(t)
+	cfg := clientgrpc.Config{
+		Label: common.Label{Value: "test_client"},
+		Host:  common.Host{Value: "127.0.0.1"},
+		Port:  common.Port{Value: uint32(lis.Addr().(*net.TCPAddr).Port)},
+	}
+	built, err := cfg.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := built.(*clientgrpc.Client)
+	c.Inject([]any{metrics})
+	if err := c.StandBy(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}

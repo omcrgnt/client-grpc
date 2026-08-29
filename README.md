@@ -55,9 +55,7 @@ BEMVPGAME_ASSET_GRPC_PORT=9084
 | `Close` | Close `ClientConn` |
 | `Ready` / `ProbeReady` | Wait until connectivity `Ready` |
 
-`StandBy` (not `runner.Starter`): `grpc.NewClient` performs no I/O — it builds
-a `ClientConn` that connects lazily on first RPC — so this runs in
-`app.Bootstrap`'s sequential StandBy phase instead.
+`StandBy`, not `runner.Starter` — see `Client.StandBy`'s doc comment for why.
 
 v1 transport is **insecure/plaintext** (internal mesh). TLS can be added later.
 

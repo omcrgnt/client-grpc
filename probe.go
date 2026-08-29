@@ -9,7 +9,7 @@ import (
 
 // Ready waits until the connection is Ready (or ctx ends).
 func (c *Client) Ready(ctx context.Context) error {
-	if c.conn == nil {
+	if !c.started() {
 		return fmt.Errorf("clientgrpc: client not started")
 	}
 	c.conn.Connect()
