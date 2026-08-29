@@ -18,7 +18,7 @@ type catalog struct {
 
 `Client` depends on the shared `*GRPCMetrics` singleton (registered in `unique.Global`
 on import, like `srv-grpc`). Ops metrics actuator calls `RegisterMetrics` before
-`Start`.
+`StandBy`.
 
 Typed stubs are created by the app from `Conn()`:
 
@@ -51,15 +51,19 @@ BEMVPGAME_ASSET_GRPC_PORT=9084
 |------|------|
 | `Build` / `BuildConfig` | Materialize from ecfg (`Label`, `Host`, `Port`) |
 | `Deps` / `Inject` | Wire `*GRPCMetrics` |
-| `Start` | `grpc.NewClient` with otel stats handler + prometheus interceptors |
+| `StandBy` | `grpc.NewClient` with otel stats handler + prometheus interceptors |
 | `Close` | Close `ClientConn` |
 | `Ready` / `ProbeReady` | Wait until connectivity `Ready` |
+
+`StandBy` (not `runner.Starter`): `grpc.NewClient` performs no I/O — it builds
+a `ClientConn` that connects lazily on first RPC — so this runs in
+`app.Bootstrap`'s sequential StandBy phase instead.
 
 v1 transport is **insecure/plaintext** (internal mesh). TLS can be added later.
 
 ## Telemetry
 
-On `Start`:
+On `StandBy`:
 
 - `otelgrpc.NewClientHandler` — client spans/metrics to process `TracerProvider`
 - prometheus `ClientMetrics` (with handling-time histogram) — `grpc_client_*` series

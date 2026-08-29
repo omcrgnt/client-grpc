@@ -47,7 +47,7 @@ func startHealthServer(t *testing.T) (addr string, stop func()) {
 	}
 }
 
-func TestConfig_Build_Start_integration(t *testing.T) {
+func TestConfig_Build_StandBy_integration(t *testing.T) {
 	spanExporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(trace.WithSyncer(spanExporter))
 	otel.SetTracerProvider(tp)
@@ -89,7 +89,7 @@ func TestConfig_Build_Start_integration(t *testing.T) {
 	}
 
 	c.Inject([]any{metrics})
-	if err := c.Start(t.Context()); err != nil {
+	if err := c.StandBy(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close(context.Background()) })
@@ -146,6 +146,16 @@ func TestProbeReady_notStarted(t *testing.T) {
 	c := &clientgrpc.Client{}
 	if err := c.ProbeReady(t.Context()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestClient_Close_beforeStandBy(t *testing.T) {
+	// StandBy either never ran (never wired through app.Bootstrap) or itself
+	// failed — c.conn is nil either way. Close must return cleanly, not
+	// panic on grpc.ClientConn.Close's nil-receiver dereference.
+	c := &clientgrpc.Client{}
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

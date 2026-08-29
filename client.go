@@ -36,7 +36,7 @@ func (cfg *Config) Build() (any, error) {
 }
 
 // Client is an outbound gRPC connection resource.
-// Catalog field: *Client (Configurable); dial happens in Start after Inject resolves GRPCMetrics.
+// Catalog field: *Client (Configurable); dial happens in StandBy after Inject resolves GRPCMetrics.
 type Client struct {
 	conn    *grpc.ClientConn
 	metrics *GRPCMetrics
@@ -45,6 +45,7 @@ type Client struct {
 }
 
 var _ app.Configurable = (*Client)(nil)
+var _ app.StandBy = (*Client)(nil)
 
 // BuildConfig returns the config spec for materialize.
 func (*Client) BuildConfig() (app.Materializer, error) {
@@ -81,7 +82,7 @@ func (c *Client) Target() string {
 	return c.target
 }
 
-// Conn returns the underlying gRPC connection (nil before Start).
+// Conn returns the underlying gRPC connection (nil before StandBy).
 func (c *Client) Conn() *grpc.ClientConn {
 	if c == nil {
 		return nil
@@ -89,14 +90,11 @@ func (c *Client) Conn() *grpc.ClientConn {
 	return c.conn
 }
 
-// Start dials the target with otel + prometheus client instrumentation.
-func (c *Client) Start(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
+// StandBy dials the target with otel + prometheus client instrumentation.
+// grpc.NewClient performs no I/O — it builds a ClientConn that connects
+// lazily on first RPC — so this runs in app.Bootstrap's sequential StandBy
+// phase rather than as a runner.Starter.
+func (c *Client) StandBy() error {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
@@ -114,8 +112,14 @@ func (c *Client) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the gRPC connection.
+// Close closes the gRPC connection. A no-op if StandBy never ran (e.g.
+// StandBy itself failed, or this Client was never wired through
+// app.Bootstrap) — c.conn is nil in that case, and grpc.ClientConn.Close
+// would otherwise panic on a nil receiver.
 func (c *Client) Close(_ context.Context) error {
+	if c.conn == nil {
+		return nil
+	}
 	err := c.conn.Close()
 	c.conn = nil
 	return err
