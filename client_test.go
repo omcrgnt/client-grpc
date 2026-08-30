@@ -2,6 +2,7 @@ package clientgrpc_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"reflect"
 	"strconv"
@@ -99,10 +100,11 @@ func TestConfig_Build_StandBy_integration(t *testing.T) {
 	}
 
 	c.Inject([]any{metrics})
-	if err := c.StandBy(); err != nil {
+	cleanup, err := c.StandBy()
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -159,25 +161,15 @@ func TestProbeReady_notStarted(t *testing.T) {
 	}
 }
 
-func TestClient_Close_beforeStandBy(t *testing.T) {
-	c := &clientgrpc.Client{}
-	if err := c.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestClient_Close_nilReceiver(t *testing.T) {
-	var c *clientgrpc.Client
-	if err := c.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestClient_Close_doubleClose(t *testing.T) {
-	// A different state than TestClient_Close_beforeStandBy: StandBy did
-	// succeed here, so the first Close has real work to do; the second
-	// hits the same nil-conn path but via c.conn being reset by the first
-	// Close, not via StandBy never having run.
+// TestClient_StandByCleanup_calledTwice: the cleanup StandBy returns has no
+// started()-style guard any more (removed along with the public Close
+// method) — runner.Runner never double-invokes a cleanup itself (it clears
+// the slot after calling it), so this test exercises what happens if the
+// raw closure is invoked manually a second time anyway. Per
+// grpc.ClientConn.Close's own source, a second Close call returns
+// grpc.ErrClientConnClosing rather than panicking — this pins that
+// behavior directly against the real closure, not an assumption about it.
+func TestClient_StandByCleanup_calledTwice(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -196,15 +188,16 @@ func TestClient_Close_doubleClose(t *testing.T) {
 	}
 	c := built.(*clientgrpc.Client)
 	c.Inject([]any{metrics})
-	if err := c.StandBy(); err != nil {
+	cleanup, err := c.StandBy()
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.Close(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := cleanup(context.Background()); err != nil {
+		t.Fatalf("first cleanup call: %v", err)
 	}
-	if err := c.Close(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := cleanup(context.Background()); !errors.Is(err, grpc.ErrClientConnClosing) {
+		t.Fatalf("second cleanup call err = %v, want %v", err, grpc.ErrClientConnClosing)
 	}
 }
 

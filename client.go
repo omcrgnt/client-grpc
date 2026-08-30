@@ -6,6 +6,7 @@ import (
 
 	"github.com/omcrgnt/app"
 	common "github.com/omcrgnt/proto/gen/go/common/v1"
+	"github.com/omcrgnt/runner"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
@@ -45,7 +46,7 @@ type Client struct {
 }
 
 var _ app.Configurable = (*Client)(nil)
-var _ app.StandByCleaner = (*Client)(nil)
+var _ runner.StandBy = (*Client)(nil)
 
 // BuildConfig returns the config spec for materialize.
 func (*Client) BuildConfig() (app.Materializer, error) {
@@ -92,9 +93,15 @@ func (c *Client) Conn() *grpc.ClientConn {
 
 // StandBy dials the target with otel + prometheus client instrumentation.
 // grpc.NewClient performs no I/O — it builds a ClientConn that connects
-// lazily on first RPC — so this runs in app.Bootstrap's sequential StandBy
+// lazily on first RPC — so this runs in runner.Runner's sequential StandBy
 // phase rather than as a runner.Starter.
-func (c *Client) StandBy() error {
+//
+// On success it returns a cleanup that closes conn — runner.Runner retains
+// this closure and calls it during Stop (or immediately, to unwind, if a
+// later sibling's own StandBy or Start fails). There is no started()-guard
+// here: Runner only ever calls a cleanup it received from a StandBy call
+// that itself succeeded, so a nil c.conn can't happen when this runs.
+func (c *Client) StandBy() (func(context.Context) error, error) {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
@@ -106,42 +113,14 @@ func (c *Client) StandBy() error {
 
 	conn, err := grpc.NewClient(c.target, opts...)
 	if err != nil {
-		return fmt.Errorf("clientgrpc: dial %s: %w", c.target, err)
+		return nil, fmt.Errorf("clientgrpc: dial %s: %w", c.target, err)
 	}
 	c.conn = conn
-	return nil
-}
-
-// CleanUp implements app.StandByCleaner: undoes StandBy's dial if a later
-// resource's own StandBy fails and aborts app.Bootstrap. Delegates to
-// Close, which already does exactly this (nil-safe, ignores its unused
-// ctx) — safe here specifically because both call sites are written and
-// owned by this same file, not because Close is assumed to generically
-// mean "whatever StandBy needs undone" for any other implementer.
-func (c *Client) CleanUp() error {
-	return c.Close(context.Background())
-}
-
-// started reports whether StandBy has successfully dialed. Also guards a
-// nil *Client itself (matching Label/Target/Conn) — unlike StandBy, Ready
-// and Close are ordinary public methods a caller could reach with a nil
-// pointer, not calls the framework alone makes on an already-registered
-// instance.
-func (c *Client) started() bool {
-	return c != nil && c.conn != nil
-}
-
-// Close closes the gRPC connection. A no-op if StandBy never ran (e.g.
-// StandBy itself failed, or this Client was never wired through
-// app.Bootstrap) — c.conn is nil in that case, and grpc.ClientConn.Close
-// would otherwise panic on a nil receiver.
-func (c *Client) Close(_ context.Context) error {
-	if !c.started() {
-		return nil
-	}
-	err := c.conn.Close()
-	c.conn = nil
-	return err
+	return func(context.Context) error {
+		err := conn.Close()
+		c.conn = nil
+		return err
+	}, nil
 }
 
 // newTestClient constructs a Client around an existing connection (tests only).

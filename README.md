@@ -51,16 +51,16 @@ BEMVPGAME_ASSET_GRPC_PORT=9084
 |------|------|
 | `Build` / `BuildConfig` | Materialize from ecfg (`Label`, `Host`, `Port`) |
 | `Deps` / `Inject` | Wire `*GRPCMetrics` |
-| `StandBy` | `grpc.NewClient` with otel stats handler + prometheus interceptors |
-| `CleanUp` | Undo `StandBy` (`app.StandByCleaner`) if a sibling resource's own `StandBy` fails and aborts `app.Bootstrap` |
-| `Close` | Close `ClientConn` on normal shutdown (`runner.Closer`) |
+| `StandBy` | `grpc.NewClient` with otel stats handler + prometheus interceptors; returns a cleanup that closes `ClientConn` |
 | `Ready` / `ProbeReady` | Wait until connectivity `Ready` |
 
 `StandBy`, not `runner.Starter` — see `Client.StandBy`'s doc comment for why.
-`CleanUp` and `Close` both end up closing the same `ClientConn` but are called from
-two independent paths (`app.Bootstrap`'s cleanup vs. `runner.Runner.Stop`) that
-never fire for the same instance in the same run — see `Client.CleanUp`'s doc
-comment.
+`StandBy` returns its own cleanup (`func(context.Context) error`) instead of a
+separately-implemented `Close`; `runner.Runner` retains and calls it during
+`Stop` — or immediately, to unwind, if a sibling resource's own `StandBy` or
+`Start` fails. See `Client.StandBy`'s doc comment and
+[`runner`](https://github.com/omcrgnt/runner)'s package doc for the full
+StandBy→Start ordering.
 
 v1 transport is **insecure/plaintext** (internal mesh). TLS can be added later.
 
