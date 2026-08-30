@@ -52,10 +52,15 @@ BEMVPGAME_ASSET_GRPC_PORT=9084
 | `Build` / `BuildConfig` | Materialize from ecfg (`Label`, `Host`, `Port`) |
 | `Deps` / `Inject` | Wire `*GRPCMetrics` |
 | `StandBy` | `grpc.NewClient` with otel stats handler + prometheus interceptors |
-| `Close` | Close `ClientConn` |
+| `CleanUp` | Undo `StandBy` (`app.StandByCleaner`) if a sibling resource's own `StandBy` fails and aborts `app.Bootstrap` |
+| `Close` | Close `ClientConn` on normal shutdown (`runner.Closer`) |
 | `Ready` / `ProbeReady` | Wait until connectivity `Ready` |
 
 `StandBy`, not `runner.Starter` — see `Client.StandBy`'s doc comment for why.
+`CleanUp` and `Close` both end up closing the same `ClientConn` but are called from
+two independent paths (`app.Bootstrap`'s cleanup vs. `runner.Runner.Stop`) that
+never fire for the same instance in the same run — see `Client.CleanUp`'s doc
+comment.
 
 v1 transport is **insecure/plaintext** (internal mesh). TLS can be added later.
 

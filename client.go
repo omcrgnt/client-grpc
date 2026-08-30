@@ -45,7 +45,7 @@ type Client struct {
 }
 
 var _ app.Configurable = (*Client)(nil)
-var _ app.StandBy = (*Client)(nil)
+var _ app.StandByCleaner = (*Client)(nil)
 
 // BuildConfig returns the config spec for materialize.
 func (*Client) BuildConfig() (app.Materializer, error) {
@@ -110,6 +110,16 @@ func (c *Client) StandBy() error {
 	}
 	c.conn = conn
 	return nil
+}
+
+// CleanUp implements app.StandByCleaner: undoes StandBy's dial if a later
+// resource's own StandBy fails and aborts app.Bootstrap. Delegates to
+// Close, which already does exactly this (nil-safe, ignores its unused
+// ctx) — safe here specifically because both call sites are written and
+// owned by this same file, not because Close is assumed to generically
+// mean "whatever StandBy needs undone" for any other implementer.
+func (c *Client) CleanUp() error {
+	return c.Close(context.Background())
 }
 
 // started reports whether StandBy has successfully dialed. Also guards a
