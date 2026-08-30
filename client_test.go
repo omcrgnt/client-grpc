@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,22 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
+
+// testAddrHostPort splits a net.Listener address into the (Host, Port)
+// shape clientgrpc.Config expects — the one place in this package's tests
+// that does this, shared by every test needing a real listener address.
+func testAddrHostPort(t *testing.T, addr string) (host string, port uint32) {
+	t.Helper()
+	h, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("bad addr %q: %v", addr, err)
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		t.Fatalf("bad port in addr %q: %v", addr, err)
+	}
+	return h, uint32(p)
+}
 
 func testGRPCMetrics(t *testing.T) (*clientgrpc.GRPCMetrics, *prometheus.Registry) {
 	t.Helper()
@@ -55,14 +72,7 @@ func TestConfig_Build_StandBy_integration(t *testing.T) {
 	addr, stop := startHealthServer(t)
 	t.Cleanup(stop)
 
-	host, portStr, ok := strings.Cut(addr, ":")
-	if !ok {
-		t.Fatalf("bad addr %q", addr)
-	}
-	var port uint32
-	for _, ch := range portStr {
-		port = port*10 + uint32(ch-'0')
-	}
+	host, port := testAddrHostPort(t, addr)
 
 	metrics, reg := testGRPCMetrics(t)
 

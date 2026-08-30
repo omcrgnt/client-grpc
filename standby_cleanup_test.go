@@ -43,17 +43,14 @@ func TestClient_ClosedWhenSiblingStandByFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lis.Close() })
 
-	host, portStr, ok := splitHostPort(lis.Addr().String())
-	if !ok {
-		t.Fatalf("bad addr %q", lis.Addr().String())
-	}
+	host, port := testAddrHostPort(t, lis.Addr().String())
 
 	metrics, _ := testGRPCMetrics(t)
 
 	built, err := (&clientgrpc.Config{
 		Label: common.Label{Value: "sibling_fail_test"},
 		Host:  common.Host{Value: host},
-		Port:  common.Port{Value: portStr},
+		Port:  common.Port{Value: port},
 	}).Build()
 	if err != nil {
 		t.Fatal(err)
@@ -79,21 +76,4 @@ func TestClient_ClosedWhenSiblingStandByFails(t *testing.T) {
 	if c.Conn() != nil {
 		t.Fatal("client-grpc.Client's real *grpc.ClientConn was not closed by app.Bootstrap's cleanup path")
 	}
-}
-
-func splitHostPort(addr string) (host string, port uint32, ok bool) {
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			host = addr[:i]
-			var p uint32
-			for _, ch := range addr[i+1:] {
-				if ch < '0' || ch > '9' {
-					return "", 0, false
-				}
-				p = p*10 + uint32(ch-'0')
-			}
-			return host, p, true
-		}
-	}
-	return "", 0, false
 }
