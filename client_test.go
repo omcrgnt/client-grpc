@@ -66,6 +66,9 @@ func startHealthServer(t *testing.T) (addr string, stop func()) {
 }
 
 func TestConfig_Build_StandBy_integration(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
 	spanExporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(trace.WithSyncer(spanExporter))
 	otel.SetTracerProvider(tp)
