@@ -2,8 +2,10 @@ package clientgrpc_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,22 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
+
+// testAddrHostPort splits a net.Listener address into the (Host, Port)
+// shape clientgrpc.Config expects — the one place in this package's tests
+// that does this, shared by every test needing a real listener address.
+func testAddrHostPort(t *testing.T, addr string) (host string, port uint32) {
+	t.Helper()
+	h, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("bad addr %q: %v", addr, err)
+	}
+	p, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		t.Fatalf("bad port in addr %q: %v", addr, err)
+	}
+	return h, uint32(p)
+}
 
 func testGRPCMetrics(t *testing.T) (*clientgrpc.GRPCMetrics, *prometheus.Registry) {
 	t.Helper()
@@ -47,7 +65,10 @@ func startHealthServer(t *testing.T) (addr string, stop func()) {
 	}
 }
 
-func TestConfig_Build_Start_integration(t *testing.T) {
+func TestConfig_Build_StandBy_integration(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
 	spanExporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(trace.WithSyncer(spanExporter))
 	otel.SetTracerProvider(tp)
@@ -55,14 +76,7 @@ func TestConfig_Build_Start_integration(t *testing.T) {
 	addr, stop := startHealthServer(t)
 	t.Cleanup(stop)
 
-	host, portStr, ok := strings.Cut(addr, ":")
-	if !ok {
-		t.Fatalf("bad addr %q", addr)
-	}
-	var port uint32
-	for _, ch := range portStr {
-		port = port*10 + uint32(ch-'0')
-	}
+	host, port := testAddrHostPort(t, addr)
 
 	metrics, reg := testGRPCMetrics(t)
 
@@ -89,10 +103,11 @@ func TestConfig_Build_Start_integration(t *testing.T) {
 	}
 
 	c.Inject([]any{metrics})
-	if err := c.Start(t.Context()); err != nil {
+	cleanup, err := c.StandBy()
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -146,6 +161,46 @@ func TestProbeReady_notStarted(t *testing.T) {
 	c := &clientgrpc.Client{}
 	if err := c.ProbeReady(t.Context()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// TestClient_StandByCleanup_calledTwice: the cleanup StandBy returns has no
+// started()-style guard any more (removed along with the public Close
+// method) — runner.Runner never double-invokes a cleanup itself (it clears
+// the slot after calling it), so this test exercises what happens if the
+// raw closure is invoked manually a second time anyway. Per
+// grpc.ClientConn.Close's own source, a second Close call returns
+// grpc.ErrClientConnClosing rather than panicking — this pins that
+// behavior directly against the real closure, not an assumption about it.
+func TestClient_StandByCleanup_calledTwice(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lis.Close() })
+
+	metrics, _ := testGRPCMetrics(t)
+	cfg := clientgrpc.Config{
+		Label: common.Label{Value: "test_client"},
+		Host:  common.Host{Value: "127.0.0.1"},
+		Port:  common.Port{Value: uint32(lis.Addr().(*net.TCPAddr).Port)},
+	}
+	built, err := cfg.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := built.(*clientgrpc.Client)
+	c.Inject([]any{metrics})
+	cleanup, err := c.StandBy()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cleanup(context.Background()); err != nil {
+		t.Fatalf("first cleanup call: %v", err)
+	}
+	if err := cleanup(context.Background()); !errors.Is(err, grpc.ErrClientConnClosing) {
+		t.Fatalf("second cleanup call err = %v, want %v", err, grpc.ErrClientConnClosing)
 	}
 }
 

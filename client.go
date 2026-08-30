@@ -6,6 +6,7 @@ import (
 
 	"github.com/omcrgnt/app"
 	common "github.com/omcrgnt/proto/gen/go/common/v1"
+	"github.com/omcrgnt/runner"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
@@ -36,7 +37,7 @@ func (cfg *Config) Build() (any, error) {
 }
 
 // Client is an outbound gRPC connection resource.
-// Catalog field: *Client (Configurable); dial happens in Start after Inject resolves GRPCMetrics.
+// Catalog field: *Client (Configurable); dial happens in StandBy after Inject resolves GRPCMetrics.
 type Client struct {
 	conn    *grpc.ClientConn
 	metrics *GRPCMetrics
@@ -45,6 +46,7 @@ type Client struct {
 }
 
 var _ app.Configurable = (*Client)(nil)
+var _ runner.StandBy = (*Client)(nil)
 
 // BuildConfig returns the config spec for materialize.
 func (*Client) BuildConfig() (app.Materializer, error) {
@@ -81,7 +83,7 @@ func (c *Client) Target() string {
 	return c.target
 }
 
-// Conn returns the underlying gRPC connection (nil before Start).
+// Conn returns the underlying gRPC connection (nil before StandBy).
 func (c *Client) Conn() *grpc.ClientConn {
 	if c == nil {
 		return nil
@@ -89,14 +91,17 @@ func (c *Client) Conn() *grpc.ClientConn {
 	return c.conn
 }
 
-// Start dials the target with otel + prometheus client instrumentation.
-func (c *Client) Start(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
+// StandBy dials the target with otel + prometheus client instrumentation.
+// grpc.NewClient performs no I/O — it builds a ClientConn that connects
+// lazily on first RPC — so this runs in runner.Runner's sequential StandBy
+// phase rather than as a runner.Starter.
+//
+// On success it returns a cleanup that closes conn — runner.Runner retains
+// this closure and calls it during Stop (or immediately, to unwind, if a
+// later sibling's own StandBy or Start fails). There is no started()-guard
+// here: Runner only ever calls a cleanup it received from a StandBy call
+// that itself succeeded, so a nil c.conn can't happen when this runs.
+func (c *Client) StandBy() (func(context.Context) error, error) {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
@@ -108,17 +113,14 @@ func (c *Client) Start(ctx context.Context) error {
 
 	conn, err := grpc.NewClient(c.target, opts...)
 	if err != nil {
-		return fmt.Errorf("clientgrpc: dial %s: %w", c.target, err)
+		return nil, fmt.Errorf("clientgrpc: dial %s: %w", c.target, err)
 	}
 	c.conn = conn
-	return nil
-}
-
-// Close closes the gRPC connection.
-func (c *Client) Close(_ context.Context) error {
-	err := c.conn.Close()
-	c.conn = nil
-	return err
+	return func(context.Context) error {
+		err := conn.Close()
+		c.conn = nil
+		return err
+	}, nil
 }
 
 // newTestClient constructs a Client around an existing connection (tests only).

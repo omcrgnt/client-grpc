@@ -9,9 +9,10 @@ retract (
 
 require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
-	github.com/omcrgnt/app v0.21.2
+	github.com/omcrgnt/app v0.24.0
 	github.com/omcrgnt/proto/gen/go v0.4.0
 	github.com/omcrgnt/res v0.22.0
+	github.com/omcrgnt/runner v0.24.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0
@@ -34,7 +35,6 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/omcrgnt/ecfg v0.21.2 // indirect
-	github.com/omcrgnt/runner v0.21.0 // indirect
 	github.com/omcrgnt/sdi v0.21.0 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect

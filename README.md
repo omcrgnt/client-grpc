@@ -18,7 +18,7 @@ type catalog struct {
 
 `Client` depends on the shared `*GRPCMetrics` singleton (registered in `unique.Global`
 on import, like `srv-grpc`). Ops metrics actuator calls `RegisterMetrics` before
-`Start`.
+`StandBy`.
 
 Typed stubs are created by the app from `Conn()`:
 
@@ -51,15 +51,22 @@ BEMVPGAME_ASSET_GRPC_PORT=9084
 |------|------|
 | `Build` / `BuildConfig` | Materialize from ecfg (`Label`, `Host`, `Port`) |
 | `Deps` / `Inject` | Wire `*GRPCMetrics` |
-| `Start` | `grpc.NewClient` with otel stats handler + prometheus interceptors |
-| `Close` | Close `ClientConn` |
+| `StandBy` | `grpc.NewClient` with otel stats handler + prometheus interceptors; returns a cleanup that closes `ClientConn` |
 | `Ready` / `ProbeReady` | Wait until connectivity `Ready` |
+
+`StandBy`, not `runner.Starter` — see `Client.StandBy`'s doc comment for why.
+`StandBy` returns its own cleanup (`func(context.Context) error`) instead of a
+separately-implemented `Close`; `runner.Runner` retains and calls it during
+`Stop` — or immediately, to unwind, if a sibling resource's own `StandBy` or
+`Start` fails. See `Client.StandBy`'s doc comment and
+[`runner`](https://github.com/omcrgnt/runner)'s package doc for the full
+StandBy→Start ordering.
 
 v1 transport is **insecure/plaintext** (internal mesh). TLS can be added later.
 
 ## Telemetry
 
-On `Start`:
+On `StandBy`:
 
 - `otelgrpc.NewClientHandler` — client spans/metrics to process `TracerProvider`
 - prometheus `ClientMetrics` (with handling-time histogram) — `grpc_client_*` series
