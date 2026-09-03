@@ -9,7 +9,7 @@ retract (
 
 require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
-	github.com/omcrgnt/app v0.24.0
+	github.com/omcrgnt/app v0.24.1
 	github.com/omcrgnt/proto/gen/go v0.4.0
 	github.com/omcrgnt/res v0.22.0
 	github.com/omcrgnt/runner v0.24.0
