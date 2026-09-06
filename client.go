@@ -19,6 +19,10 @@ type Config struct {
 	Label common.Label
 	Host  common.Host
 	Port  common.Port
+
+	// extraUnary carries New's options through to Build — unexported, so
+	// ecfg's reflection-based walker can't set it and leaves it alone.
+	extraUnary []grpc.UnaryClientInterceptor
 }
 
 func (cfg *Config) Build() (any, error) {
@@ -31,8 +35,9 @@ func (cfg *Config) Build() (any, error) {
 		return nil, fmt.Errorf("clientgrpc: port is required")
 	}
 	return &Client{
-		label:  cfg.Label.GetValue(),
-		target: fmt.Sprintf("%s:%d", host, port),
+		label:      cfg.Label.GetValue(),
+		target:     fmt.Sprintf("%s:%d", host, port),
+		extraUnary: cfg.extraUnary,
 	}, nil
 }
 
@@ -43,14 +48,50 @@ type Client struct {
 	metrics *GRPCMetrics
 	label   string
 	target  string
+
+	// extraUnary is set via New/WithUnaryClientInterceptors, carried through
+	// BuildConfig -> Config -> Build (ecfg only fills Label/Host/Port; this
+	// survives because it's unexported and reflection-unsettable, so ecfg's
+	// walker skips it — see New's doc comment for why the catalog field must
+	// be constructed non-nil for this to matter at all).
+	extraUnary []grpc.UnaryClientInterceptor
 }
 
 var _ app.Configurable = (*Client)(nil)
 var _ runner.StandBy = (*Client)(nil)
 
-// BuildConfig returns the config spec for materialize.
-func (*Client) BuildConfig() (app.Materializer, error) {
-	return &Config{}, nil
+// Option configures a Client at construction time, for values ecfg can't
+// fill (e.g. interceptor functions) — see New.
+type Option func(*Client)
+
+// WithUnaryClientInterceptors appends interceptors run in addition to (not
+// instead of) the metrics interceptor this package always installs, in the
+// order given, closest-to-the-call last (grpc.WithChainUnaryInterceptor
+// semantics).
+func WithUnaryClientInterceptors(in ...grpc.UnaryClientInterceptor) Option {
+	return func(c *Client) { c.extraUnary = append(c.extraUnary, in...) }
+}
+
+// New constructs a Client with the given options applied. The catalog field
+// holding it must be assigned this (non-nil) in the app's resources literal
+// — app/fill.go's catalogCallable only preserves a Configurable's
+// pre-constructed state through BuildConfig if the field isn't nil to begin
+// with; left nil (the zero-value default), NewResource-equivalent handling
+// creates a blank *Client and these options are lost. See
+// pkg/atlasmigrate's doc comment for the same rule applied to a
+// ResourceFactory instead of a Configurable.
+func New(opts ...Option) *Client {
+	c := &Client{}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// BuildConfig returns the config spec for materialize, carrying over
+// whatever options New was called with.
+func (c *Client) BuildConfig() (app.Materializer, error) {
+	return &Config{extraUnary: c.extraUnary}, nil
 }
 
 // Deps declares the shared GRPCMetrics singleton.
@@ -102,12 +143,13 @@ func (c *Client) Conn() *grpc.ClientConn {
 // here: Runner only ever calls a cleanup it received from a StandBy call
 // that itself succeeded, so a nil c.conn can't happen when this runs.
 func (c *Client) StandBy() (func(context.Context) error, error) {
+	unary := append([]grpc.UnaryClientInterceptor{c.metrics.UnaryClientInterceptor()}, c.extraUnary...)
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
 			otelgrpc.WithMetricAttributes(attribute.String("client", c.label)),
 		)),
-		grpc.WithChainUnaryInterceptor(c.metrics.UnaryClientInterceptor()),
+		grpc.WithChainUnaryInterceptor(unary...),
 		grpc.WithChainStreamInterceptor(c.metrics.StreamClientInterceptor()),
 	}
 
