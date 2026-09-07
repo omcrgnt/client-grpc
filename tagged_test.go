@@ -8,6 +8,7 @@ import (
 
 	clientgrpc "github.com/omcrgnt/client-grpc"
 	common "github.com/omcrgnt/proto/gen/go/common/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
@@ -86,6 +87,58 @@ func TestTagged_BuildConfig_Build_StandBy_integration(t *testing.T) {
 	}
 	if resp.GetStatus() != grpc_health_v1.HealthCheckResponse_SERVING {
 		t.Fatalf("status = %v", resp.GetStatus())
+	}
+}
+
+// TestTagged_NewTagged_interceptorCarriesThrough pins down the extraUnary
+// path added for npc-dialogue's shopstore client (gctxgrpc propagation to a
+// compat-filtering store) — NewTagged's option must survive
+// BuildConfig -> taggedConfig.Build -> the real StandBy-dialed Client,
+// same as Client's own New/WithUnaryClientInterceptors already does.
+func TestTagged_NewTagged_interceptorCarriesThrough(t *testing.T) {
+	addr, stop := startHealthServer(t)
+	t.Cleanup(stop)
+	host, port := testAddrHostPort(t, addr)
+	metrics, _ := testGRPCMetrics(t)
+
+	var called bool
+	interceptor := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		called = true
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+
+	c := clientgrpc.NewTagged[tagB](clientgrpc.WithTaggedUnaryClientInterceptors[tagB](interceptor))
+	matz, err := c.BuildConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := matz.(interface{ Build() (any, error) })
+	specVal := reflect.ValueOf(spec).Elem()
+	specVal.FieldByName("Label").Set(reflect.ValueOf(common.Label{Value: "test_tagged_opt"}))
+	specVal.FieldByName("Host").Set(reflect.ValueOf(common.Host{Value: host}))
+	specVal.FieldByName("Port").Set(reflect.ValueOf(common.Port{Value: port}))
+
+	built, err := spec.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged := built.(*clientgrpc.Tagged[tagB])
+	tagged.Inject([]any{metrics})
+
+	cleanup, err := tagged.StandBy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	hc := grpc_health_v1.NewHealthClient(tagged.Conn())
+	if _, err := hc.Check(ctx, &grpc_health_v1.HealthCheckRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("expected NewTagged's interceptor to run during the real call")
 	}
 }
 

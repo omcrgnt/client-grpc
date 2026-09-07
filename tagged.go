@@ -25,12 +25,38 @@ import (
 //	type UserTag struct{}
 //	UserGRPC *clientgrpc.Tagged[UserTag] `ecfg:"USER"`
 //
-// Unlike Client, Tagged has no New/Option constructor yet — nothing has
-// needed WithUnaryClientInterceptors on a tagged client so far, so a nil
-// catalog field is always fine here (contrast Client's New doc comment).
-// Add one the same way if/when a consumer needs it.
+// For a tagged client that also needs WithUnaryClientInterceptors (e.g.
+// gctxgrpc propagation onward to a compat-filtering store — see
+// npc-dialogue's shopstore client), use NewTagged/WithTaggedUnaryClientInterceptors
+// below, same non-nil-catalog-field rule as Client's own New.
 type Tagged[Tag any] struct {
 	inner *Client
+
+	// extraUnary carries NewTagged's options through to BuildConfig ->
+	// taggedConfig.Build — unexported, so ecfg's reflection-based walker
+	// can't set it and leaves it alone (same reasoning as Client.extraUnary).
+	extraUnary []grpc.UnaryClientInterceptor
+}
+
+// TaggedOption configures a Tagged[Tag] at construction time — same purpose
+// as Client's own Option, for values ecfg can't fill.
+type TaggedOption[Tag any] func(*Tagged[Tag])
+
+// WithTaggedUnaryClientInterceptors is Tagged's equivalent of
+// WithUnaryClientInterceptors.
+func WithTaggedUnaryClientInterceptors[Tag any](in ...grpc.UnaryClientInterceptor) TaggedOption[Tag] {
+	return func(t *Tagged[Tag]) { t.extraUnary = append(t.extraUnary, in...) }
+}
+
+// NewTagged constructs a Tagged[Tag] with the given options applied. The
+// catalog field holding it must be assigned this (non-nil) — same
+// catalogCallable rule as Client's own New (see its doc comment).
+func NewTagged[Tag any](opts ...TaggedOption[Tag]) *Tagged[Tag] {
+	t := &Tagged[Tag]{}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 // taggedConfig redefines Config as a new named (generic) type — same field
@@ -53,8 +79,8 @@ func (s *taggedConfig[Tag]) Build() (any, error) {
 
 var _ app.Configurable = (*Tagged[struct{}])(nil)
 
-func (*Tagged[Tag]) BuildConfig() (app.Materializer, error) {
-	return &taggedConfig[Tag]{}, nil
+func (t *Tagged[Tag]) BuildConfig() (app.Materializer, error) {
+	return &taggedConfig[Tag]{extraUnary: t.extraUnary}, nil
 }
 
 // Deps/Inject/StandBy/Conn/Label/Target below are plain passthroughs to the
